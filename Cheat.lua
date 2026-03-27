@@ -159,10 +159,46 @@ StopButton.Position = UDim2.new(0, 10, 0, 170)
 StopButton.Text = "Stop Animation"
 StopButton.BackgroundColor3 = Color3.fromRGB(150, 50, 50)
 
+local StatusLabel = Instance.new("TextLabel", PlayFrame)
+StatusLabel.Size = UDim2.new(1, -20, 0, 30)
+StatusLabel.Position = UDim2.new(0, 10, 0, 210)
+StatusLabel.Text = "Status: Ready"
+StatusLabel.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+StatusLabel.TextScaled = true
+
 -- Хранилище данных
 local animationCounts = {} -- {[animationId] = count}
 local entityAnimationListeners = {} -- {[entityName] = connection}
 local currentEntityLogs = {} -- {animationId = {count, label}}
+
+-- Переменные для управления анимациями
+local currentTrack = nil
+local isAnimationPlaying = false
+local animationEndConnection = nil
+
+-- Функция для очистки текущей анимации
+local function clearCurrentAnimation()
+    if currentTrack then
+        -- Отключаем обработчик окончания анимации
+        if animationEndConnection then
+            animationEndConnection:Disconnect()
+            animationEndConnection = nil
+        end
+        
+        -- Останавливаем анимацию если она играет
+        if currentTrack.IsPlaying then
+            currentTrack:Stop()
+        end
+        
+        currentTrack = nil
+    end
+    isAnimationPlaying = false
+    StatusLabel.Text = "Status: Ready"
+    StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+    PlayButton.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+    PlayButton.Text = "Play"
+end
 
 -- Функция для добавления анимации в LoggerSaves
 local function addToSaves(animationId)
@@ -414,13 +450,57 @@ local function RefreshEntitiesList()
             EntitiesFrame.Visible = false
             EntityLogsFrame.Visible = true
             BackButton.Visible = true
-            
-            -- Обновляем заголовок
-            Frame.Title = entity.Name .. " - Animation Logs"
         end)
     end
     
     EntitiesFrame.CanvasSize = UDim2.new(0, 0, 0, EntitiesList.AbsoluteContentSize.Y)
+end
+
+-- Функция для воспроизведения анимации
+local function playAnimation(animId)
+    if isAnimationPlaying then
+        StatusLabel.Text = "Status: Cannot play - another animation is already playing!"
+        StatusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+        task.wait(2)
+        if not isAnimationPlaying then
+            StatusLabel.Text = "Status: Ready"
+            StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+        end
+        return false
+    end
+    
+    if not Animator then
+        StatusLabel.Text = "Status: Error - No Animator found!"
+        StatusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+        return false
+    end
+    
+    local animation = Instance.new("Animation")
+    animation.AnimationId = animId
+    
+    currentTrack = Animator:LoadAnimation(animation)
+    currentTrack.Looped = isLooping
+    currentTrack:Play()
+    isAnimationPlaying = true
+    
+    StatusLabel.Text = "Status: Playing animation..."
+    StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+    PlayButton.BackgroundColor3 = Color3.fromRGB(150, 150, 150)
+    PlayButton.Text = "Playing..."
+    
+    -- Обработчик окончания анимации
+    if not isLooping then
+        animationEndConnection = currentTrack.Stopped:Connect(function()
+            clearCurrentAnimation()
+        end)
+    else
+        -- Для зацикленных анимаций, очищаем при ручной остановке
+        animationEndConnection = currentTrack.Stopped:Connect(function()
+            clearCurrentAnimation()
+        end)
+    end
+    
+    return true
 end
 
 -- Переключение вкладок
@@ -465,7 +545,6 @@ BackButton.MouseButton1Click:Connect(function()
     EntitiesFrame.Visible = true
     EntityLogsFrame.Visible = false
     BackButton.Visible = false
-    Frame.Title = "Animation Logger"
 end)
 
 local isMinimized = false
@@ -488,6 +567,8 @@ MinimizeButton.MouseButton1Click:Connect(function()
 end)
 
 CloseButton.MouseButton1Click:Connect(function()
+    -- Очищаем текущую анимацию при закрытии
+    clearCurrentAnimation()
     ScreenGui:Destroy()
 end)
 
@@ -506,17 +587,17 @@ if Animator then
 end
 
 -- Обработчики кнопок
-local currentTrack
 PlayButton.MouseButton1Click:Connect(function()
     local animId = TextBox.Text:match("%d+")
     if animId then
-        local animation = Instance.new("Animation")
-        animation.AnimationId = "rbxassetid://" .. animId
-        
-        if Animator then
-            currentTrack = Animator:LoadAnimation(animation)
-            currentTrack.Looped = isLooping
-            currentTrack:Play()
+        playAnimation("rbxassetid://" .. animId)
+    else
+        StatusLabel.Text = "Status: Invalid Animation ID!"
+        StatusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+        task.wait(2)
+        if not isAnimationPlaying then
+            StatusLabel.Text = "Status: Ready"
+            StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
         end
     end
 end)
@@ -530,23 +611,49 @@ LoopToggle.MouseButton1Click:Connect(function()
 end)
 
 FreezeToggle.MouseButton1Click:Connect(function()
+    if not currentTrack then
+        StatusLabel.Text = "Status: No animation playing to freeze!"
+        StatusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+        task.wait(2)
+        if not isAnimationPlaying then
+            StatusLabel.Text = "Status: Ready"
+            StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+        end
+        return
+    end
+    
     isFrozen = not isFrozen
     FreezeToggle.Text = "Freeze: " .. (isFrozen and "ON" or "OFF")
     
-    if currentTrack then
-        if isFrozen then
-            frozenTime = currentTrack.TimePosition
-            currentTrack:Stop()
-        else
-            currentTrack:Play()
-            currentTrack.TimePosition = frozenTime
-        end
+    if isFrozen then
+        frozenTime = currentTrack.TimePosition
+        currentTrack:Stop()
+        StatusLabel.Text = "Status: Frozen at " .. string.format("%.2f", frozenTime) .. "s"
+    else
+        currentTrack:Play()
+        currentTrack.TimePosition = frozenTime
+        StatusLabel.Text = "Status: Resumed from " .. string.format("%.2f", frozenTime) .. "s"
     end
 end)
 
 StopButton.MouseButton1Click:Connect(function()
     if currentTrack then
-        currentTrack:Stop()
+        clearCurrentAnimation()
+        StatusLabel.Text = "Status: Animation stopped"
+        StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
+        task.wait(2)
+        if not isAnimationPlaying then
+            StatusLabel.Text = "Status: Ready"
+            StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+        end
+    else
+        StatusLabel.Text = "Status: No animation playing"
+        StatusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+        task.wait(2)
+        if not isAnimationPlaying then
+            StatusLabel.Text = "Status: Ready"
+            StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+        end
     end
 end)
 
